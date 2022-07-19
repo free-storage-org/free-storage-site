@@ -1,3 +1,4 @@
 target/
 web-target/
 Cargo.lock
+/.env*

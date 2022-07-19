@@ -8,7 +8,10 @@ static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
 fn hello() -> Html {
     html! {
         <div>
-            <h1>{"Edit client/src/lib.rs to get started!"}</h1>
+            <form enctype="multipart/form-data" action="/upload" method="POST">
+                <input type="file" name="file" />
+                <input type="submit" value="Upload" />
+            </form>
         </div>
     }
 }

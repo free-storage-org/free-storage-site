@@ -6,8 +6,10 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-axum = "0.5"
+axum = { version = "0.5", features = ["multipart"] }
 tokio = { version = "1.18", features = ["rt-multi-thread", "macros"] }
+free-storage = { git = "https://github.com/free-storage-org/free-storage" }
+dotenv = "0.15"
 
 [build-dependencies]
 wasm-pack = "0.10"

@@ -6,7 +6,7 @@ pub async fn frontend(uri: Uri) -> ([(header::HeaderName, &'static str); 1], &'s
             [(header::CONTENT_TYPE, $ct)]
         };
     }
-    match uri.path() {
+    match uri.path().to_lowercase().as_str() {
         "/assets/client.wasm" => (
             ct!("application/wasm"),
             include_bytes!(concat!(env!("OUT_DIR"), "/client_bg.wasm")),

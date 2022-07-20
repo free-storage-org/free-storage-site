@@ -1,5 +1,5 @@
 use axum::{
-    extract::Multipart,
+    extract::{Multipart, Query},
     routing::{get, post},
     Extension, Json, Router,
 };
@@ -37,6 +37,7 @@ async fn main() {
         .serve(
             Router::new()
                 .route("/upload", post(upload))
+                .route("/get", get(get_file))
                 .fallback(get(frontend))
                 .layer(Extension(state))
                 .into_make_service(),
@@ -59,11 +60,19 @@ async fn upload(
 
         // std::fs::write(file_name, file_data);
 
-        let fid = FileId::upload_file(file_name, file_data, repo.clone(), token.clone())
+        let file_id = FileId::upload_file(file_name, file_data, repo.clone(), token.clone())
             .await
             .unwrap();
-        file_ids.push(fid);
+        file_ids.push(file_id);
     }
 
     Json(file_ids)
+}
+
+async fn get_file(
+    Extension(State { token, .. }): Extension<State>,
+    Query(file_id): Query<FileId>,
+) -> Vec<u8> {
+    let (file_data, _) = file_id.get_file(Some(token.clone())).await.unwrap();
+    file_data
 }

@@ -8,7 +8,9 @@ edition = "2021"
 [dependencies]
 axum = { version = "0.5", features = ["multipart"] }
 tokio = { version = "1.18", features = ["rt-multi-thread", "macros"] }
-free-storage = { git = "https://github.com/free-storage-org/free-storage" }
+free-storage = { git = "https://github.com/free-storage-org/free-storage", features = [
+    "serde",
+] }
 dotenv = "0.15"
 
 [build-dependencies]

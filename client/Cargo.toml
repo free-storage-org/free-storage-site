@@ -27,6 +27,7 @@ web-sys = { version = "0.3", features = [
 js-sys = "0.3"
 wasm-bindgen-futures = "0.4"
 serde = { version = "1.0", features = ["derive"] }
+serde_qs = "0.10"
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3"

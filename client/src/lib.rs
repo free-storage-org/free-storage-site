@@ -28,6 +28,7 @@ fn hello() -> Html {
             Closure::<dyn Fn(Event)>::new(|e: Event| {
                 e.prevent_default();
                 let form = e.target().unwrap().unchecked_into::<HtmlFormElement>();
+                let output = document().query_selector("#output").unwrap().unwrap();
                 wasm_bindgen_futures::spawn_local(async move {
                     let mut req_opts = RequestInit::new();
                     req_opts.method("POST");
@@ -44,7 +45,21 @@ fn hello() -> Html {
                     .into_serde::<Vec<FileId>>()
                     .unwrap();
 
-                    window().alert_with_message(&format!("{:?}", res));
+                    for file_id in res {
+                        let url = format!(
+                            "{origin}/get?{querystring}",
+                            origin = window().location().origin().unwrap(),
+                            querystring = serde_qs::to_string(&file_id).unwrap()
+                        );
+                        let a = document().create_element("a").unwrap();
+                        a.set_attribute("href", &url).unwrap();
+                        a.set_inner_html(&url);
+                        output.append_child(&a).unwrap();
+
+                        output
+                            .append_child(&document().create_element("br").unwrap())
+                            .unwrap();
+                    }
                 })
             })
             .into_js_value()
@@ -63,7 +78,7 @@ fn hello() -> Html {
                 <input type="submit" value="Upload" />
             </form>
             <div>
-                {"Your download URL is:"}
+                {"Your download URLs are:"}
                 <span id="output"></span>
             </div>
         </div>

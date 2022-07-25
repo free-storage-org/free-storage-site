@@ -1,13 +1,11 @@
 use axum::{
     extract::{Multipart, Query},
     http::{header, HeaderMap},
+    response::Html,
     routing::{get, post},
     Extension, Json, Router,
 };
 use free_storage::FileId;
-
-mod frontend;
-use frontend::frontend;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct State {
@@ -37,9 +35,9 @@ async fn main() {
     axum::Server::bind(&addr)
         .serve(
             Router::new()
+                .route("/", get(|| async { Html(include_str!("index.html")) }))
                 .route("/upload", post(upload))
                 .route("/get", get(get_file))
-                .fallback(get(frontend))
                 .layer(Extension(state))
                 .into_make_service(),
         )

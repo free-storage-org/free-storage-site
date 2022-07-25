@@ -1,5 +1,6 @@
 use axum::{
     extract::{Multipart, Query},
+    http::{header, HeaderMap},
     routing::{get, post},
     Extension, Json, Router,
 };
@@ -58,8 +59,6 @@ async fn upload(
 
         let file_data = field.bytes().await.unwrap();
 
-        // std::fs::write(file_name, file_data);
-
         let file_id = FileId::upload_file(file_name, file_data, repo.clone(), token.clone())
             .await
             .unwrap();
@@ -68,11 +67,17 @@ async fn upload(
 
     Json(file_ids)
 }
-
 async fn get_file(
     Extension(State { token, .. }): Extension<State>,
     Query(file_id): Query<FileId>,
-) -> Vec<u8> {
-    let (file_data, _) = file_id.get_file(Some(token.clone())).await.unwrap();
-    file_data
+) -> (HeaderMap, Vec<u8>) {
+    let (file_data, file_name) = file_id.get_file(Some(token)).await.unwrap();
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_DISPOSITION,
+        header::HeaderValue::from_str(&format!("attachment; filename={}", file_name)).unwrap(),
+    );
+
+    (headers, file_data)
 }

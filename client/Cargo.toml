@@ -17,7 +17,16 @@ yew = "0.19"
 # allocator, however.
 wee_alloc = "0.4"
 
-web-sys = { version = "0.3", features = ["Window"] }
+web-sys = { version = "0.3", features = [
+    "Window",
+    "HtmlFormElement",
+    "RequestInit",
+    "FormData",
+    "Response",
+] }
+js-sys = "0.3"
+wasm-bindgen-futures = "0.4"
+serde = { version = "1.0", features = ["derive"] }
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3"

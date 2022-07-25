@@ -1,17 +1,71 @@
-use wasm_bindgen::prelude::*;
-use yew::html;
+use js_sys::Promise;
+use serde::{Deserialize, Serialize};
+use wasm_bindgen::{prelude::*, JsCast};
+use wasm_bindgen_futures::JsFuture;
+use web_sys::{Document, Event, FormData, HtmlFormElement, RequestInit, Response, Window};
+use yew::{html, use_effect};
 
 #[global_allocator]
 static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct FileId {
+    pub asset_url: String,
+    pub chunks: usize,
+}
+
 #[yew::function_component(Hello)]
 fn hello() -> Html {
+    use_effect(|| {
+        let form = document()
+            .query_selector("#upload-form")
+            .unwrap()
+            .unwrap()
+            .unchecked_into::<HtmlFormElement>();
+
+        form.add_event_listener_with_callback(
+            "submit",
+            Closure::<dyn Fn(Event)>::new(|e: Event| {
+                e.prevent_default();
+                let form = e.target().unwrap().unchecked_into::<HtmlFormElement>();
+                wasm_bindgen_futures::spawn_local(async move {
+                    let mut req_opts = RequestInit::new();
+                    req_opts.method("POST");
+                    req_opts.body(Some(FormData::new_with_form(&form).unwrap().as_ref()));
+
+                    let res = f(f(window().fetch_with_str_and_init("/upload", &req_opts))
+                        .await
+                        .unwrap()
+                        .unchecked_into::<Response>()
+                        .json()
+                        .unwrap())
+                    .await
+                    .unwrap()
+                    .into_serde::<Vec<FileId>>()
+                    .unwrap();
+
+                    window().alert_with_message(&format!("{:?}", res));
+                })
+            })
+            .into_js_value()
+            .as_ref()
+            .unchecked_ref(),
+        )
+        .unwrap();
+
+        || {}
+    });
+
     html! {
         <div>
-            <form enctype="multipart/form-data" action="/upload" method="POST">
-                <input type="file" name="file" />
+            <form id="upload-form">
+                <input type="file" name="file" id="files" multiple={true} />
                 <input type="submit" value="Upload" />
             </form>
+            <div>
+                {"Your download URL is:"}
+                <span id="output"></span>
+            </div>
         </div>
     }
 }
@@ -26,4 +80,16 @@ pub fn main() {
             .get_element_by_id("app")
             .unwrap(),
     );
+}
+
+fn window() -> Window {
+    web_sys::window().unwrap()
+}
+
+fn document() -> Document {
+    window().document().unwrap()
+}
+
+fn f(p: Promise) -> JsFuture {
+    JsFuture::from(p)
 }

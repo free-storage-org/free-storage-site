@@ -1,6 +1,6 @@
 FROM rust:slim as build
 
-RUN apt-get update && apt-get install -y perl build-essential
+RUN apt-get update && apt-get install -y perl libssl-dev build-essential
 
 ADD . /src
 WORKDIR /src

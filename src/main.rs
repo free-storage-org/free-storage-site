@@ -48,10 +48,10 @@ async fn main() {
 async fn upload(
     Extension(State { token, repo }): Extension<State>,
     mut multipart: Multipart,
-) -> Json<Vec<FileId>> {
-    let mut file_ids = Vec::new();
-
-    while let Ok(Some(field)) = multipart.next_field().await {
+) -> Json<Option<FileId>> {
+    // only allow one file per request
+    // to not take too long processing the request
+    if let Ok(Some(field)) = multipart.next_field().await {
         let file_name = String::from(field.file_name().unwrap());
         println!("uploading {file_name}");
 
@@ -60,10 +60,11 @@ async fn upload(
         let file_id = FileId::upload_file(file_name, file_data, repo.clone(), token.clone())
             .await
             .unwrap();
-        file_ids.push(file_id);
-    }
 
-    Json(file_ids)
+        Json(Some(file_id))
+    } else {
+        Json(None)
+    }
 }
 async fn get_file(
     Extension(State { token, .. }): Extension<State>,

@@ -19,25 +19,32 @@
             document.addEventListener("DOMContentLoaded", async () => {
                 /** @type {HTMLFormElement} */
                 const form = document.querySelector("#upload-form");
+                /** @type {HTMLInputElement} */
+                const files = document.querySelector("#files");
                 const output = document.querySelector("#output");
 
                 form.addEventListener("submit", async (e) => {
                     e.preventDefault();
-                    const formData = new FormData(form);
-                    const response = await fetch("/upload", {
-                        method: "POST",
-                        body: formData
-                    });
-                    const data = await response.json();
-                    for (const fileId of data) {
-                        const url = `${
-                            window.location.origin
-                        }/get?${new URLSearchParams(fileId)}`;
-                        const link = document.createElement("a");
-                        link.href = url;
-                        link.innerText = url;
-                        link.target = "_blank";
-                        output.appendChild(link);
+
+                    for (const file of files.files) {
+                        (async () => {
+                            const formData = new FormData();
+                            formData.append("file", file);
+
+                            const response = await fetch("/upload", {
+                                method: "POST",
+                                body: formData
+                            });
+                            const fileId = await response.json();
+                            const url = `${
+                                window.location.origin
+                            }/get?${new URLSearchParams(fileId)}`;
+                            const link = document.createElement("a");
+                            link.href = url;
+                            link.innerText = url;
+                            link.target = "_blank";
+                            output.appendChild(link);
+                        })();
                     }
                 });
             });

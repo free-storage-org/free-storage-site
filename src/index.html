@@ -28,12 +28,12 @@
 
                     for (const file of files.files) {
                         (async () => {
-                            const formData = new FormData();
-                            formData.append("file", file);
-
                             const response = await fetch("/upload", {
                                 method: "POST",
-                                body: formData
+                                body: file,
+                                headers: {
+                                    "X-File-Name": file.name
+                                }
                             });
                             const fileId = await response.json();
                             const url = `${

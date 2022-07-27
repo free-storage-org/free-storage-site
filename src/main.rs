@@ -1,11 +1,13 @@
 use axum::{
-    extract::{Multipart, Query},
-    http::{header, HeaderMap},
+    body::Body,
+    extract::Query,
+    http::{header, HeaderMap, Request},
     response::Html,
     routing::{get, post},
     Extension, Json, Router,
 };
 use free_storage::FileId;
+use futures_util::stream::StreamExt;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct State {
@@ -18,7 +20,7 @@ async fn main() {
     let _ = dotenv::dotenv();
 
     let port = std::env::var("PORT")
-        .unwrap_or_else(|_e| String::from("8080"))
+        .unwrap_or_else(|_e| "8080".to_owned())
         .parse::<u16>()
         .expect("PORT must be a valid port");
     let repo = std::env::var("GITHUB_REPO").expect("GITHUB_REPO must be set");
@@ -47,24 +49,23 @@ async fn main() {
 
 async fn upload(
     Extension(State { token, repo }): Extension<State>,
-    mut multipart: Multipart,
-) -> Json<Option<FileId>> {
-    // only allow one file per request
-    // to not take too long processing the request
-    if let Ok(Some(field)) = multipart.next_field().await {
-        let file_name = String::from(field.file_name().unwrap());
-        println!("uploading {file_name}");
+    mut req: Request<Body>,
+) -> Json<FileId> {
+    let name = req
+        .headers()
+        .get("X-File-Name")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("unknown")
+        .to_owned();
+    println!("uploading {name}");
 
-        let file_data = field.bytes().await.unwrap();
-
-        let file_id = FileId::upload_file(file_name, file_data, repo.clone(), token.clone())
-            .await
-            .unwrap();
-
-        Json(Some(file_id))
-    } else {
-        Json(None)
+    let mut bytes = Vec::new();
+    while let Some(Ok(part)) = req.body_mut().next().await {
+        bytes.extend(part);
     }
+    println!("got data for {name}");
+
+    Json(FileId::upload_file(name, bytes, repo, token).await.unwrap())
 }
 async fn get_file(
     Extension(State { token, .. }): Extension<State>,

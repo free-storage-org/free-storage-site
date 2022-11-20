@@ -1,5 +1,5 @@
 [package]
-name = "free-storage"
+name = "site"
 version = "0.1.0"
 edition = "2021"
 
@@ -7,7 +7,21 @@ edition = "2021"
 
 [dependencies]
 free-storage = { git = "https://github.com/free-storage-org/free-storage" }
-axum = "0.5"
-tokio = { version = "1.18", features = ["rt-multi-thread", "macros"] }
+axum = { version = "0.5", features = ["ws"] }
+tokio = { version = "1.18", features = [
+    "rt-multi-thread",
+    "macros",
+    "tracing",
+] }
 dotenv = "0.15"
-futures-util = "0.3"
+futures = "0.3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+rmp-serde = "1.1"
+console-subscriber = "0.1"
+
+[profile.release]
+codegen-units = 1
+opt-level = 3
+lto = true
+strip = true

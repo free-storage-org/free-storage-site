@@ -1,9 +1,9 @@
 use axum::{
     extract::{
         ws::{Message, WebSocket},
-        Query, WebSocketUpgrade,
+        FromRequest, RequestParts, WebSocketUpgrade,
     },
-    http::{header, HeaderMap},
+    http::{header, HeaderMap, StatusCode},
     response::{Html, Response},
     routing::get,
     Extension, Router,
@@ -23,7 +23,6 @@ async fn main() {
     let _ = dotenv::dotenv();
 
     tracing_subscriber::registry()
-        .with(console_subscriber::spawn())
         .with(
             fmt::layer().without_time().compact().with_filter(
                 EnvFilter::builder()
@@ -59,6 +58,48 @@ async fn main() {
         )
         .await
         .unwrap();
+}
+
+// ~~ripped~~ from https://github.com/tokio-rs/axum/issues/434#issuecomment-954898159
+struct Qs<T>(T);
+
+#[axum::async_trait]
+impl<T, B: Send> FromRequest<B> for Qs<T>
+where
+    T: serde::de::DeserializeOwned,
+{
+    type Rejection = (StatusCode, String);
+
+    async fn from_request(req: &mut RequestParts<B>) -> Result<Self, Self::Rejection> {
+        fn err(e: impl std::fmt::Display) -> (StatusCode, String) {
+            (StatusCode::BAD_REQUEST, e.to_string())
+        }
+
+        let query = req.uri().query().ok_or_else(|| err("No GET Parameters"))?;
+        Ok(Self(
+            serde_qs::Config::new(5, false)
+                .deserialize_str(query)
+                .map_err(err)?,
+        ))
+    }
+}
+
+async fn get_file(
+    Extension(State { token, .. }): Extension<State>,
+    Qs(file_id): Qs<FileId>,
+) -> (HeaderMap, Vec<u8>) {
+    tracing::trace!(?file_id, "getting file");
+    let (data, name) = file_id.get(Some(token)).await.unwrap();
+
+    tracing::trace!("got file {name}");
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_DISPOSITION,
+        header::HeaderValue::from_str(&format!("attachment; filename={}", name)).unwrap(),
+    );
+
+    (headers, data)
 }
 
 // the whole reason we're using WebSockets is to avoid Railway's 5 minute request timeout
@@ -134,7 +175,15 @@ impl std::io::Read for WebSocketReader {
                         handle_bytes(t.as_bytes())
                     }
                 }
-                Some(Ok(Message::Close(_))) | Some(Err(_)) | None => {
+                Some(Ok(Message::Close(frame))) => {
+                    tracing::trace!(?frame, "got close message");
+                    Ok(0)
+                }
+                Some(Err(e)) => {
+                    tracing::trace!(?e, "websocket probably closed");
+                    Ok(0)
+                }
+                None => {
                     tracing::trace!("websocket closed");
                     Ok(0)
                 }
@@ -166,29 +215,45 @@ async fn upload(
             return;
         };
 
-        let fid = FileId::upload(file_name, &mut WebSocketReader::new(stream), repo, token)
-            .await
-            .unwrap();
+        fn handle_bytes(b: &[u8]) {
+            std::fs::write(format!("test-{}.bin", b.len()), b).unwrap();
+        }
 
-        let _ = sink
-            .send(Message::Binary(rmp_serde::to_vec(&fid).unwrap()))
-            .await;
+        match stream.next().await {
+            Some(Ok(Message::Binary(b))) => {
+                tracing::trace!("got binary message with len: {}", b.len());
+                handle_bytes(&b)
+            }
+            Some(Ok(Message::Text(t))) => {
+                tracing::trace!("got text message with len: {}", t.len());
+                if t == "done" {
+                    tracing::trace!("got done message");
+                } else {
+                    handle_bytes(t.as_bytes())
+                }
+            }
+            Some(Ok(Message::Close(frame))) => {
+                tracing::trace!(?frame, "got close message");
+            }
+            Some(Err(e)) => {
+                tracing::trace!(?e, "websocket probably closed");
+            }
+            None => {
+                tracing::trace!("websocket closed");
+            }
+            Some(Ok(ty)) => {
+                tracing::trace!("got other message: {ty:#?}");
+            }
+        }
+
+        // let fid = FileId::upload(file_name, &mut WebSocketReader::new(stream), repo, token)
+        //     .await
+        //     .unwrap();
+
+        // let _ = sink
+        //     .send(Message::Binary(rmp_serde::to_vec(&fid).unwrap()))
+        //     .await;
     };
 
-    ws.on_upgrade(handler)
-}
-
-async fn get_file(
-    Extension(State { token, .. }): Extension<State>,
-    Query(file_id): Query<FileId>,
-) -> (HeaderMap, Vec<u8>) {
-    let (file_data, file_name) = file_id.get(Some(token)).await.unwrap();
-
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        header::CONTENT_DISPOSITION,
-        header::HeaderValue::from_str(&format!("attachment; filename={}", file_name)).unwrap(),
-    );
-
-    (headers, file_data)
+    ws.max_message_size(105_000_000).on_upgrade(handler)
 }

@@ -128,7 +128,6 @@
                             const url = `/get?${new URLSearchParams(fid)}`;
                             const container = document.createElement("div");
                             const link = document.createElement("a");
-                            link.download = file.name;
                             link.href = url;
                             link.innerText = window.location.origin + url;
                             container.appendChild(link);

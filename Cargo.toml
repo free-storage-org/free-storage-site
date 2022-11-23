@@ -18,7 +18,8 @@ futures = "0.3"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 rmp-serde = "1.1"
-console-subscriber = "0.1"
+serde = "1.0"
+serde_qs = "0.10"
 
 [profile.release]
 codegen-units = 1

@@ -62,7 +62,10 @@
             crossorigin="anonymous"
         />
 
-        <script crossorigin src="https://unpkg.com/@msgpack/msgpack"></script>
+        <script
+            crossorigin
+            src="https://unpkg.com/@msgpack/msgpack@2.8.0"
+        ></script>
 
         <title>Free Storage</title>
 
@@ -118,14 +121,16 @@
                             );
 
                             // @ts-ignore
-                            let fid = MessagePack.decode(msgpk);
-                            /** @type {{ asset }} */
-                            fid = {
-                                asset_ids: fid[0],
-                                repo: fid[1]
+                            let msg = MessagePack.decode(msgpk);
+                            /** @type {{ asset_ids: number[], repo: string }} fildId */
+                            let fid = {
+                                asset_ids: msg[0],
+                                repo: msg[1]
                             };
 
-                            const url = `/get?${new URLSearchParams(fid)}`;
+                            const url = `/get?${fid.asset_ids
+                                .map((id, i) => `asset_ids[${i}]=${id}`)
+                                .join("&")}&repo=${fid.repo}`;
                             const container = document.createElement("div");
                             const link = document.createElement("a");
                             link.href = url;

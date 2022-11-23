@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use axum::{
     extract::{
         ws::{Message, WebSocket},
@@ -9,8 +11,11 @@ use axum::{
     Extension, Router,
 };
 use free_storage::FileId;
-use futures::{stream::SplitStream, SinkExt, StreamExt};
+use futures::{SinkExt, StreamExt};
 use tracing_subscriber::{filter::LevelFilter, fmt, prelude::*, EnvFilter};
+
+const MAX_UPLOADED_CHUNKS: u16 = 150;
+const UPLOAD_TIMEOUT: Duration = Duration::from_secs(20 * 60); // 20 minutes
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct State {
@@ -104,101 +109,6 @@ async fn get_file(
 
 // the whole reason we're using WebSockets is to avoid Railway's 5 minute request timeout
 
-struct WebSocketReader {
-    stream: SplitStream<WebSocket>,
-    overflow: Vec<u8>,
-}
-
-impl WebSocketReader {
-    fn new(stream: SplitStream<WebSocket>) -> Self {
-        Self {
-            stream,
-            overflow: Vec::new(),
-        }
-    }
-}
-
-impl std::io::Read for WebSocketReader {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        tracing::trace!("reading {} bytes from websocket", buf.len());
-        tracing::trace!("overflow: {}", self.overflow.len());
-        let (remaining, idx) = if self.overflow.len() > buf.len() {
-            // We have more data overflowing than the buffer can hold, so we need to split it up
-
-            tracing::trace!("overflow buffer not overflowing buffer");
-
-            buf.copy_from_slice(&self.overflow[..buf.len()]); // Copy the first part of the overflow buffer
-            self.overflow.drain(..buf.len()); // Remove the parts we copied
-            return Ok(buf.len()); // We can't do anything else, so return the number of bytes we copied
-        } else {
-            // We have less data overflowing than the buffer can hold, so we can copy it all and then read more
-
-            tracing::trace!("overflow buffer not overflowing buffer");
-
-            buf[..self.overflow.len()].copy_from_slice(&self.overflow); // Copy the overflow buffer
-            self.overflow.drain(..); // Clear the overflow buffer
-            (buf.len() - self.overflow.len(), self.overflow.len()) // Return the remaining buffer and the index to start writing at
-        };
-
-        futures::executor::block_on(async move {
-            let mut handle_bytes = |b: &[u8]| {
-                if b.len() > remaining {
-                    // We have more bytes than we can fit in the buffer, so we
-                    // need to store the extra bytes for the next read.
-
-                    tracing::info!("{} bytes overflowing buffer", b.len() - remaining);
-
-                    buf[idx..idx + remaining].copy_from_slice(&b[..remaining]); // Copy the bytes we can fit into the buffer
-                    self.overflow.extend_from_slice(&b[remaining..]); // Store the overflow bytes for the next read
-                    Ok(idx + remaining) // Return the number of bytes we copied
-                } else {
-                    tracing::trace!("{} bytes not overflowing buffer", b.len());
-
-                    buf[idx..idx + b.len()].copy_from_slice(b);
-                    Ok(idx + b.len())
-                }
-            };
-
-            tracing::trace!("reading from websocket");
-
-            match self.stream.next().await {
-                Some(Ok(Message::Binary(b))) => {
-                    tracing::trace!("got binary message with len: {}", b.len());
-                    handle_bytes(&b)
-                }
-                Some(Ok(Message::Text(t))) => {
-                    tracing::trace!("got text message with len: {}", t.len());
-                    if t == "done" {
-                        tracing::trace!("got done message");
-                        Ok(0)
-                    } else {
-                        handle_bytes(t.as_bytes())
-                    }
-                }
-                Some(Ok(Message::Close(frame))) => {
-                    tracing::trace!(?frame, "got close message");
-                    Ok(0)
-                }
-                Some(Err(e)) => {
-                    tracing::trace!(?e, "websocket probably closed");
-                    Ok(0)
-                }
-                None => {
-                    tracing::trace!("websocket closed");
-                    Ok(0)
-                }
-                Some(Ok(ty)) => {
-                    tracing::trace!("got other message: {ty:#?}");
-                    Err(std::io::Error::new(
-                        std::io::ErrorKind::WouldBlock,
-                        "ping/pong",
-                    ))
-                }
-            }
-        })
-    }
-}
-
 async fn upload(
     Extension(State { token, repo }): Extension<State>,
     ws: WebSocketUpgrade,
@@ -215,45 +125,68 @@ async fn upload(
             return;
         };
 
-        fn handle_bytes(b: &[u8]) {
-            std::fs::write(format!("test-{}.bin", b.len()), b).unwrap();
-        }
+        let data = match tokio::time::timeout(UPLOAD_TIMEOUT, async {
+            let mut data = Vec::new();
 
-        match stream.next().await {
-            Some(Ok(Message::Binary(b))) => {
-                tracing::trace!("got binary message with len: {}", b.len());
-                handle_bytes(&b)
-            }
-            Some(Ok(Message::Text(t))) => {
-                tracing::trace!("got text message with len: {}", t.len());
-                if t == "done" {
-                    tracing::trace!("got done message");
-                } else {
-                    handle_bytes(t.as_bytes())
+            for _ in 0..MAX_UPLOADED_CHUNKS {
+                match stream.next().await {
+                    Some(Ok(Message::Binary(b))) => {
+                        tracing::trace!("got binary message with len: {}", b.len());
+                        data.extend(b);
+                    }
+                    Some(Ok(Message::Text(t))) => {
+                        tracing::trace!("got text message with len: {}", t.len());
+                        if t == "done" {
+                            tracing::trace!("got done message");
+                            break;
+                        } else {
+                            data.extend(t.as_bytes());
+                        }
+                    }
+                    Some(Ok(Message::Close(frame))) => {
+                        tracing::trace!(?frame, "got close message");
+                        break;
+                    }
+                    Some(Err(e)) => {
+                        tracing::trace!(?e, "websocket probably closed");
+                        break;
+                    }
+                    None => {
+                        tracing::trace!("websocket closed");
+                        break;
+                    }
+                    Some(Ok(ty)) => {
+                        tracing::trace!("got other message: {ty:#?}");
+                    }
                 }
             }
-            Some(Ok(Message::Close(frame))) => {
-                tracing::trace!(?frame, "got close message");
+            data
+        })
+        .await
+        {
+            Ok(data) => data,
+            Err(_) => {
+                tracing::trace!("timed out");
+                return;
             }
-            Some(Err(e)) => {
-                tracing::trace!(?e, "websocket probably closed");
-            }
-            None => {
-                tracing::trace!("websocket closed");
-            }
-            Some(Ok(ty)) => {
-                tracing::trace!("got other message: {ty:#?}");
-            }
-        }
+        };
 
-        // let fid = FileId::upload(file_name, &mut WebSocketReader::new(stream), repo, token)
-        //     .await
-        //     .unwrap();
+        tracing::trace!("got data with len: {}", data.len());
 
-        // let _ = sink
-        //     .send(Message::Binary(rmp_serde::to_vec(&fid).unwrap()))
-        //     .await;
+        let fid = FileId::upload(file_name, &*data, repo, token)
+            .await
+            .unwrap();
+
+        tracing::trace!(?fid, "uploaded file");
+
+        let _ = sink
+            .send(Message::Binary(rmp_serde::to_vec(&fid).unwrap()))
+            .await;
+
+        tracing::trace!("sent file id");
     };
 
-    ws.max_message_size(105_000_000).on_upgrade(handler)
+    ws.max_send_queue(MAX_UPLOADED_CHUNKS as usize)
+        .max_message_size(105_000_000)
+        .on_upgrade(handler)
 }

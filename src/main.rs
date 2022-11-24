@@ -63,7 +63,7 @@ async fn auth<B: Send>(
     let mut parts = RequestParts::new(req);
 
     let auth = parts.extract::<CookieJar>().await.unwrap();
-    let token = String::from(auth.get("github_token").unwrap().value());
+    let token = String::from(auth.get("github_token").ok_or_else(err)?.value());
 
     #[derive(serde::Deserialize)]
     struct GitHubUser {
@@ -88,10 +88,7 @@ async fn auth<B: Send>(
         })?
         .json::<GitHubUser>()
         .await
-        .map_err(|e| {
-            tracing::error!(?e);
-            err()
-        })?;
+        .map_err(|_| err())?;
     let repo = format!("{github_username}/__storage");
 
     // reconstruct the request

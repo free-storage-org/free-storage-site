@@ -5,7 +5,7 @@ use axum::{
     },
     http::{header, HeaderMap, Request, StatusCode},
     middleware::{from_fn, Next},
-    response::{Html, IntoResponse, Response},
+    response::{Html, IntoResponse, Redirect, Response},
     routing::get,
     Extension, Router,
 };
@@ -62,19 +62,20 @@ async fn auth<B: Send>(
     // running extractors requires a `axum::http::request::Parts`
     let mut parts = RequestParts::new(req);
 
-    // `TypedHeader<Authorization<Bearer>>` extracts the auth token
     let auth = parts.extract::<CookieJar>().await.unwrap();
-    let token = String::from(auth.get("github_token").ok_or_else(err)?.value());
-    println!("token: {}", token);
+    let token = String::from(auth.get("github_token").unwrap().value());
 
     #[derive(serde::Deserialize)]
     struct GitHubUser {
-        html_url: String,
+        login: String,
     }
 
     let GitHubUser {
-        html_url: user_github_url,
-    } = reqwest::Client::new()
+        login: github_username,
+    } = reqwest::Client::builder()
+        .user_agent("Rust")
+        .build()
+        .unwrap()
         .get("https://api.github.com/user")
         .bearer_auth(&token)
         .send()
@@ -87,8 +88,11 @@ async fn auth<B: Send>(
         })?
         .json::<GitHubUser>()
         .await
-        .map_err(|_| err())?;
-    let repo = format!("{user_github_url}/__storage");
+        .map_err(|e| {
+            tracing::error!(?e);
+            err()
+        })?;
+    let repo = format!("{github_username}/__storage");
 
     // reconstruct the request
     let mut req = parts.try_into_request().unwrap();
@@ -147,7 +151,10 @@ async fn main() {
 struct GitHubAuth {
     code: String,
 }
-async fn authenticate(jar: CookieJar, Qs(GitHubAuth { code }): Qs<GitHubAuth>) -> CookieJar {
+async fn authenticate(
+    jar: CookieJar,
+    Qs(GitHubAuth { code }): Qs<GitHubAuth>,
+) -> impl IntoResponse {
     #[derive(serde::Deserialize)]
     struct GitHubToken {
         access_token: String,
@@ -165,10 +172,14 @@ async fn authenticate(jar: CookieJar, Qs(GitHubAuth { code }): Qs<GitHubAuth>) -
         .await
         .unwrap();
 
-    jar.add(
-        Cookie::build("github_token", access_token)
-            .http_only(true)
-            .finish(),
+    (
+        jar.add(
+            Cookie::build("github_token", access_token)
+                .http_only(true)
+                .path("/")
+                .finish(),
+        ),
+        Redirect::to("/"),
     )
 }
 
@@ -220,8 +231,6 @@ async fn upload(
     Extension(State { token, repo }): Extension<State>,
     ws: WebSocketUpgrade,
 ) -> Response {
-    dbg!(&token);
-    dbg!(&repo);
     let handler = |socket: WebSocket| async move {
         let (mut sink, mut stream) = socket.split();
 

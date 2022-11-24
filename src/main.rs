@@ -1,23 +1,108 @@
-use std::time::Duration;
-
 use axum::{
     extract::{
         ws::{Message, WebSocket},
         FromRequest, RequestParts, WebSocketUpgrade,
     },
-    http::{header, HeaderMap, StatusCode},
-    response::{Html, Response},
+    http::{header, HeaderMap, Request, StatusCode},
+    middleware::{from_fn, Next},
+    response::{Html, IntoResponse, Redirect, Response},
     routing::get,
     Extension, Router,
 };
+use axum_extra::extract::{cookie::Cookie, CookieJar};
 use free_storage::FileId;
 use futures::{SinkExt, StreamExt};
+use once_cell::sync::Lazy;
+use reqwest::header::ACCEPT;
+use std::time::Duration;
 use tracing_subscriber::{filter::LevelFilter, fmt, prelude::*, EnvFilter};
 
+/// The maximum chunks allowed to be uploaded at once.
+///
+/// To get the size of the chunks in bytes, multiply this number by 100,000,000.
 const MAX_UPLOADED_CHUNKS: u16 = 150;
-const UPLOAD_TIMEOUT: Duration = Duration::from_secs(20 * 60); // 20 minutes
+/// How long to wait for a chunk to be gotten from the request.
+///
+/// The default is 20 minutes.
+const UPLOAD_TIMEOUT: Duration = Duration::from_secs(20 * 60);
+/// The OAuth client ID to use to sign in with GitHub.
+///
+/// This should defined in the `.env` file.
+static OAUTH_CLIENT_ID: Lazy<String> = Lazy::new(|| match std::env::var("OAUTH_CLIENT_ID") {
+    Ok(id) => id,
+    Err(_) => {
+        tracing::error!("OAUTH_CLIENT_ID is not defined in the environment");
+        std::process::exit(1);
+    }
+});
+/// The OAuth client secret to use to sign in with GitHub.
+///
+/// This should defined in the `.env` file.
+static OAUTH_CLIENT_SECRET: Lazy<String> =
+    Lazy::new(|| match std::env::var("OAUTH_CLIENT_SECRET") {
+        Ok(secret) => secret,
+        Err(_) => {
+            tracing::error!("OAUTH_CLIENT_SECRET is not defined in the environment");
+            std::process::exit(1);
+        }
+    });
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+async fn auth<B: Send>(
+    req: Request<B>,
+    next: Next<B>,
+) -> Result<impl IntoResponse, Response<String>> {
+    fn err() -> Response<String> {
+        Response::builder()
+            .status(StatusCode::UNAUTHORIZED)
+            .header(header::CONTENT_TYPE, "text/html")
+            .body(include_str!("login.html").replace("%OAUTH_CLIENT_ID%", &OAUTH_CLIENT_ID))
+            .unwrap()
+    }
+
+    // running extractors requires a `axum::http::request::Parts`
+    let mut parts = RequestParts::new(req);
+
+    let auth = parts.extract::<CookieJar>().await.unwrap();
+    let token = String::from(auth.get("github_token").unwrap().value());
+
+    #[derive(serde::Deserialize)]
+    struct GitHubUser {
+        login: String,
+    }
+
+    let GitHubUser {
+        login: github_username,
+    } = reqwest::Client::builder()
+        .user_agent("Rust")
+        .build()
+        .unwrap()
+        .get("https://api.github.com/user")
+        .bearer_auth(&token)
+        .send()
+        .await
+        .map_err(|e| {
+            Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(e.to_string())
+                .unwrap()
+        })?
+        .json::<GitHubUser>()
+        .await
+        .map_err(|e| {
+            tracing::error!(?e);
+            err()
+        })?;
+    let repo = format!("{github_username}/__storage");
+
+    // reconstruct the request
+    let mut req = parts.try_into_request().unwrap();
+
+    req.extensions_mut().insert(State { token, repo });
+
+    Ok(next.run(req).await)
+}
+
+#[derive(Clone, Debug, Default)]
 struct State {
     repo: String,
     token: String,
@@ -37,17 +122,13 @@ async fn main() {
         )
         .init();
 
+    Lazy::force(&OAUTH_CLIENT_ID);
+    Lazy::force(&OAUTH_CLIENT_SECRET);
+
     let port = std::env::var("PORT")
         .unwrap_or_else(|_e| "8080".to_owned())
         .parse::<u16>()
         .expect("PORT must be a valid port");
-    let repo = std::env::var("GITHUB_REPO").expect("GITHUB_REPO must be set");
-    if repo.split('/').count() != 2 {
-        panic!("GITHUB_REPO must be in the format owner/repo");
-    }
-    let token = std::env::var("GITHUB_TOKEN").expect("GITHUB_TOKEN must be set");
-
-    let state = State { repo, token };
 
     let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
     tracing::info!("listening on http://localhost:{port}/");
@@ -58,11 +139,48 @@ async fn main() {
                 .route("/", get(|| async { Html(include_str!("index.html")) }))
                 .route("/upload", get(upload))
                 .route("/get", get(get_file))
-                .layer(Extension(state))
+                .layer(from_fn(auth))
+                .route("/_/auth", get(authenticate))
                 .into_make_service(),
         )
         .await
         .unwrap();
+}
+
+#[derive(serde::Deserialize)]
+struct GitHubAuth {
+    code: String,
+}
+async fn authenticate(
+    jar: CookieJar,
+    Qs(GitHubAuth { code }): Qs<GitHubAuth>,
+) -> impl IntoResponse {
+    #[derive(serde::Deserialize)]
+    struct GitHubToken {
+        access_token: String,
+    }
+    let GitHubToken { access_token } = reqwest::Client::new()
+        .post(format!(
+            "https://github.com/login/oauth/access_token?client_id={}&client_secret={}&code={}",
+            &*OAUTH_CLIENT_ID, &*OAUTH_CLIENT_SECRET, code
+        ))
+        .header(ACCEPT, "application/json")
+        .send()
+        .await
+        .unwrap()
+        .json::<GitHubToken>()
+        .await
+        .unwrap();
+
+    (
+        jar.add(
+            Cookie::build("github_token", access_token)
+                .http_only(true)
+                .path("/")
+                .finish(),
+        ),
+        Redirect::to("/"),
+    )
 }
 
 // ~~ripped~~ from https://github.com/tokio-rs/axum/issues/434#issuecomment-954898159

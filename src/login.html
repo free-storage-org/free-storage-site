@@ -62,86 +62,23 @@
             crossorigin="anonymous"
         />
 
-        <script
-            crossorigin
-            src="https://unpkg.com/@msgpack/msgpack@2.8.0"
-        ></script>
-
-        <title>Free Storage</title>
-
         <script type="module">
             // @ts-check
 
-            /**
-             * @param {ArrayBuffer} arr
-             * @param {number} perChunk
-             */
-            function chunks(arr, perChunk) {
-                return [...Array(Math.ceil(arr.byteLength / perChunk))].map(
-                    (_, i) => arr.slice(i * perChunk, i * perChunk + perChunk)
-                );
-            }
-
             document.addEventListener("DOMContentLoaded", async () => {
-                /** @type {HTMLFormElement} */
-                const form = document.querySelector("#upload-form");
-                /** @type {HTMLInputElement} */
-                const files = document.querySelector("#files");
-                const output = document.querySelector("#output");
+                /** @type {HTMLAnchorElement} */
+                let authElem = /**
+                 * @type {any}
+                 */ (document.getElementById("auth"));
 
-                form.addEventListener("submit", async (e) => {
-                    e.preventDefault();
-
-                    for (const file of files.files) {
-                        (async () => {
-                            let ws = new WebSocket(
-                                `ws${
-                                    window.location.protocol === "https:"
-                                        ? "s"
-                                        : ""
-                                }://${window.location.host}/upload`
-                            );
-
-                            ws.addEventListener("open", async () => {
-                                ws.send(file.name);
-                                const buf = await file.arrayBuffer();
-
-                                for (const chunk of chunks(buf, 100_000_000)) {
-                                    ws.send(chunk);
-                                }
-
-                                ws.send("done");
-                            });
-
-                            /** @type {ArrayBuffer} */
-                            const msgpk = await new Promise((res) =>
-                                ws.addEventListener("message", async (b) =>
-                                    res(await b.data.arrayBuffer())
-                                )
-                            );
-
-                            // @ts-ignore
-                            let msg = MessagePack.decode(msgpk);
-                            /** @type {{ asset_ids: number[], repo: string }} fildId */
-                            let fid = {
-                                asset_ids: msg[0],
-                                repo: msg[1]
-                            };
-
-                            const url = `/get?${fid.asset_ids
-                                .map((id, i) => `asset_ids[${i}]=${id}`)
-                                .join("&")}&repo=${fid.repo}`;
-                            const container = document.createElement("div");
-                            const link = document.createElement("a");
-                            link.href = url;
-                            link.innerText = window.location.origin + url;
-                            container.appendChild(link);
-                            output.appendChild(container);
-                        })();
-                    }
-                });
+                authElem.href =
+                    authElem.href +
+                    window.location.origin +
+                    authElem.dataset.redirect;
             });
         </script>
+
+        <title>Free Storage</title>
 
         <style>
             * {
@@ -160,20 +97,14 @@
         </style>
     </head>
     <body class="text-center mt-5">
-        <form id="upload-form">
-            <input
-                class="form-control"
-                type="file"
-                name="file"
-                id="files"
-                multiple
-            />
-            <input class="btn btn-primary mt-3" type="submit" value="Upload" />
-        </form>
-        <div class="mt-5">
-            Your download URLs are:
-
-            <span id="output"></span>
-        </div>
+        <a
+            id="auth"
+            role="button"
+            class="btn btn-primary"
+            data-redirect="/_/auth"
+            href="https://github.com/login/oauth/authorize?client_id=%OAUTH_CLIENT_ID%&scope=repo&redirect_uri="
+        >
+            Login With GitHub
+        </a>
     </body>
 </html>
